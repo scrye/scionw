@@ -14,6 +14,8 @@ void proto_register_scion(void) {
 		);
 }
 
+static int dissect_scion(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data _U_);
+
 void proto_reg_handoff_scion(void) {
 	static dissector_handle_t scion_handle;
 
@@ -22,7 +24,7 @@ void proto_reg_handoff_scion(void) {
 }
 
 static int dissect_scion(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data _U_) {
-	col_set_ptr(pinfo->cinfo, COL_PROTOCOL, "SCION");
+	col_set_str(pinfo->cinfo, COL_PROTOCOL, "SCION");
 
 	/* Clear out stuff in the info column */
 	col_clear(pinfo->cinfo, COL_INFO);
