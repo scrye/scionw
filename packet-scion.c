@@ -2,7 +2,8 @@
 
 #include <epan/packet.h>
 
-#define SCION_PORT 50000
+#define SCION_PORT_1 50000
+#define SCION_PORT_2 50001
 
 static int proto_scion = -1;
 
@@ -53,6 +54,13 @@ static int hf_scion_hf_if = -1;
 static int hf_scion_hf_in_if = -1;
 static int hf_scion_hf_eg_if = -1;
 static int hf_scion_hf_mac = -1;
+
+static int hf_scion_udp_src_port = -1;
+static int hf_scion_udp_dst_port = -1;
+static int hf_scion_udp_length = -1;
+static int hf_scion_udp_checksum = -1;
+
+static int hf_scion_payload = -1;
 
 static int ett_scion_begin_flags = -1;
 static int ett_scion_dst_isd_as = -1;
@@ -157,7 +165,7 @@ void proto_register_scion(void) {
 			NULL, HFILL }
 		},
 		{ &hf_scion_src_as,
-			{ "Destination AS", "scion.src.as",
+			{ "Source AS", "scion.src.as",
 			FT_UINT32, BASE_DEC,
 			NULL, 0x000FFFFF,
 			NULL, HFILL }
@@ -306,6 +314,36 @@ void proto_register_scion(void) {
 			NULL, 0x0,
 			NULL, HFILL }
 		},
+		{ &hf_scion_udp_src_port,
+			{"SCION UDP Source Port", "scion.udp.src.port",
+			FT_UINT16, BASE_DEC,
+			NULL, 0x0,
+			NULL, HFILL }
+		},
+		{ &hf_scion_udp_dst_port,
+			{"SCION UDP Destination Port", "scion.udp.dst.port",
+			FT_UINT16, BASE_DEC,
+			NULL, 0x0,
+			NULL, HFILL }
+		},
+		{ &hf_scion_udp_length,
+			{"SCIOND UDP Length", "scion.udp.length",
+			FT_UINT16, BASE_DEC,
+			NULL, 0x0,
+			NULL, HFILL }
+		},
+		{ &hf_scion_udp_checksum,
+			{"SCION UDP Checksum", "scion.udp.checksum",
+			FT_UINT16, BASE_HEX,
+			NULL, 0x0,
+			NULL, HFILL }
+		},
+		{ &hf_scion_payload,
+			{"Payload", "scion.udp.payload",
+			FT_STRING, BASE_NONE,
+			NULL, 0x0,
+			NULL, HFILL }
+		},
 	};
 
 	static gint *ett[] = {
@@ -329,16 +367,19 @@ void proto_register_scion(void) {
 }
 
 static int dissect_scion(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_, void *data _U_);
-static dissector_handle_t udp_handle;
 static dissector_handle_t scion_handle;
+static dissector_handle_t udp_handle;
+static dissector_handle_t ip_handle;
 
 void proto_reg_handoff_scion(void) {
 	//static dissector_handle_t scion_handle;
 
 	scion_handle = create_dissector_handle(dissect_scion, proto_scion);
-	dissector_add_uint("udp.port", SCION_PORT, scion_handle);
+	dissector_add_uint("udp.port", SCION_PORT_1, scion_handle);
+	dissector_add_uint("udp.port", SCION_PORT_2, scion_handle);
 
 	udp_handle = find_dissector("udp");
+	ip_handle = find_dissector("ip");
 }
 
 static guint8 dissect_if(tvbuff_t *tvb, int offset, proto_tree *tree _U_) {
@@ -465,7 +506,7 @@ static int dissect_scion(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_
 		address_length += 2;
 	}
 
-	guint8 padding = (32 - address_length) % 8;
+	guint8 padding = (80 - address_length) % 8;
 	proto_item * addr_pad = proto_tree_add_item(scion_tree, hf_scion_addr_padding, tvb, offset, padding, ENC_BIG_ENDIAN);
 	proto_item_append_text(addr_pad, "%d bytes", padding);
 	proto_item_set_len(addr_pad, padding);
@@ -494,9 +535,25 @@ static int dissect_scion(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree _U_
 	}
 
 	if (next_proto == 17) {
-		dissector_delete_uint("udp.port", SCION_PORT, scion_handle);
-		call_dissector(udp_handle, tvb_new_subset_remaining(tvb, offset), pinfo, tree);
-		dissector_add_uint("udp.port", SCION_PORT, scion_handle);
+		proto_tree_add_item(scion_tree, hf_scion_udp_src_port, tvb, offset, 2, ENC_BIG_ENDIAN);
+		offset += 2;
+		proto_tree_add_item(scion_tree, hf_scion_udp_dst_port, tvb, offset, 2, ENC_BIG_ENDIAN);
+		// SCION UDP protocol 10080 is SIG encapsulated traffic
+		// guint16 udp_destination = tvb_get_guint16(tvb, offset, ENC_BIG_ENDIAN);
+		offset += 2;
+		proto_tree_add_item(scion_tree, hf_scion_udp_length, tvb, offset, 2, ENC_BIG_ENDIAN);
+		offset += 2;
+		proto_tree_add_item(scion_tree, hf_scion_udp_checksum, tvb, offset, 2, ENC_BIG_ENDIAN);
+		offset += 2;
+		// Do not bother to parse SIG-SIG frames
+		/*
+		if (udp_destination == 10080) {
+			offset += 8; // TODO skip unknown garbage?
+			call_dissector(ip_handle, tvb_new_subset_remaining(tvb, offset), pinfo, tree);
+		}
+		*/
 	}
+
+	proto_tree_add_item(scion_tree, hf_scion_payload, tvb, offset, tvb_captured_length(tvb)-offset, ENC_NA);
 	return tvb_captured_length(tvb);
 }
